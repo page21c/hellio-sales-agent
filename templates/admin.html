@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HELLIO BRIDGE — 영업 자동화 대시보드</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Pretendard',-apple-system,BlinkMacSystemFont,sans-serif; background:#f5f5f0; color:#1a1a1a; }
+.header { background:#1a1a1a; color:#fff; padding:16px 24px; display:flex; align-items:center; justify-content:space-between; }
+.header h1 { font-size:18px; font-weight:600; }
+.header .status { font-size:13px; color:#7cda8e; }
+.container { max-width:1200px; margin:0 auto; padding:20px; }
+
+/* 스탯 카드 */
+.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:24px; }
+.stat-card { background:#fff; border-radius:10px; padding:16px; border:1px solid #e8e8e4; }
+.stat-card .label { font-size:12px; color:#888; margin-bottom:4px; }
+.stat-card .value { font-size:24px; font-weight:600; }
+.stat-card .sub { font-size:11px; color:#aaa; margin-top:4px; }
+
+/* 파이프라인 */
+.pipeline { background:#fff; border-radius:10px; padding:20px; margin-bottom:24px; border:1px solid #e8e8e4; }
+.pipeline h2 { font-size:15px; font-weight:600; margin-bottom:16px; }
+.pipe-steps { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.pipe-step { flex:1; min-width:140px; padding:12px; background:#f9f9f6; border-radius:8px; text-align:center; border:1px solid #e8e8e4; }
+.pipe-step.active { border-color:#2563eb; background:#eff6ff; }
+.pipe-step.done { border-color:#16a34a; background:#f0fdf4; }
+.pipe-step .step-name { font-size:13px; font-weight:500; }
+.pipe-step .step-stat { font-size:11px; color:#666; margin-top:4px; }
+.pipe-arrow { font-size:18px; color:#ccc; }
+
+/* 섹션 */
+.section { background:#fff; border-radius:10px; padding:20px; margin-bottom:20px; border:1px solid #e8e8e4; }
+.section h2 { font-size:15px; font-weight:600; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; }
+.section h2 .badge { font-size:11px; background:#2563eb; color:#fff; padding:2px 8px; border-radius:10px; }
+
+/* 버튼 */
+.btn { padding:8px 16px; border-radius:6px; border:1px solid #ddd; background:#fff; cursor:pointer; font-size:13px; }
+.btn:hover { background:#f5f5f0; }
+.btn-primary { background:#1a1a1a; color:#fff; border-color:#1a1a1a; }
+.btn-primary:hover { background:#333; }
+.btn-success { background:#16a34a; color:#fff; border-color:#16a34a; }
+.btn-danger { background:#dc2626; color:#fff; border-color:#dc2626; }
+.btn-group { display:flex; gap:8px; margin-top:12px; }
+.btn:disabled { opacity:0.5; cursor:not-allowed; }
+
+/* 테이블 */
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th { text-align:left; padding:8px 12px; background:#f9f9f6; border-bottom:1px solid #e8e8e4; font-weight:500; color:#666; }
+td { padding:8px 12px; border-bottom:1px solid #f0f0ec; }
+tr:hover { background:#fafaf8; }
+.tag { font-size:11px; padding:2px 6px; border-radius:4px; }
+.tag-yes { background:#dcfce7; color:#166534; }
+.tag-no { background:#fee2e2; color:#991b1b; }
+.tag-wait { background:#fef9c3; color:#854d0e; }
+
+/* 이메일 미리보기 */
+.email-preview { background:#f9f9f6; border-radius:8px; padding:16px; margin-top:12px; border:1px solid #e8e8e4; }
+.email-preview .subject { font-weight:600; margin-bottom:8px; }
+.email-preview .body { white-space:pre-wrap; line-height:1.6; font-size:13px; color:#444; }
+.email-preview .meta { font-size:11px; color:#888; margin-bottom:8px; }
+
+/* 모달 */
+.modal-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.4); z-index:100; align-items:center; justify-content:center; }
+.modal-overlay.show { display:flex; }
+.modal { background:#fff; border-radius:12px; padding:24px; max-width:600px; width:90%; max-height:80vh; overflow-y:auto; }
+.modal h3 { font-size:16px; margin-bottom:16px; }
+.modal textarea { width:100%; min-height:200px; padding:12px; border:1px solid #ddd; border-radius:6px; font-size:13px; line-height:1.6; resize:vertical; }
+.modal input { width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:13px; margin-bottom:8px; }
+
+/* 로그 */
+.log { background:#1a1a1a; color:#7cda8e; padding:16px; border-radius:8px; font-family:monospace; font-size:12px; max-height:200px; overflow-y:auto; white-space:pre-wrap; }
+
+/* 탭 */
+.tabs { display:flex; gap:0; margin-bottom:16px; border-bottom:1px solid #e8e8e4; }
+.tab { padding:8px 16px; cursor:pointer; font-size:13px; border-bottom:2px solid transparent; color:#888; }
+.tab.active { color:#1a1a1a; border-bottom-color:#1a1a1a; font-weight:500; }
+.tab-content { display:none; }
+.tab-content.active { display:block; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>HELLIO BRIDGE 영업 자동화</h1>
+  <div class="status" id="serverStatus">서버 연결 확인 중...</div>
+</div>
+
+<div class="container">
+  <!-- 통계 카드 -->
+  <div class="stats" id="statsCards">
+    <div class="stat-card"><div class="label">전체 공장</div><div class="value" id="statTotal">-</div><div class="sub">독립 건물 (입주 제외)</div></div>
+    <div class="stat-card"><div class="label">API 보강 완료</div><div class="value" id="statEnriched">-</div><div class="sub" id="statEnrichedSub"></div></div>
+    <div class="stat-card"><div class="label">태양광 후보</div><div class="value" id="statCandidates">-</div><div class="sub">건축면적 660m² 이상</div></div>
+    <div class="stat-card"><div class="label">이메일 확보</div><div class="value" id="statEmails">-</div><div class="sub" id="statEmailsSub"></div></div>
+    <div class="stat-card"><div class="label">전화번호 보유</div><div class="value" id="statPhones">-</div></div>
+    <div class="stat-card"><div class="label">메일 발송</div><div class="value" id="statSent">-</div></div>
+  </div>
+
+  <!-- 파이프라인 -->
+  <div class="pipeline">
+    <h2>자동화 파이프라인</h2>
+    <div class="pipe-steps">
+      <div class="pipe-step done" id="pipe1"><div class="step-name">CSV 로딩</div><div class="step-stat" id="pipe1stat">172,467건</div></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step" id="pipe2"><div class="step-name">API 보강</div><div class="step-stat" id="pipe2stat">매일 06시</div></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step" id="pipe3"><div class="step-name">이메일 수집</div><div class="step-stat" id="pipe3stat">매일 08시</div></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step" id="pipe4"><div class="step-name">메일 생성</div><div class="step-stat" id="pipe4stat">초안 검토 필요</div></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step" id="pipe5"><div class="step-name">자동 발송</div><div class="step-stat" id="pipe5stat">매일 09시</div></div>
+    </div>
+    <div class="btn-group">
+      <button class="btn" onclick="runEnrich()">보강 실행</button>
+      <button class="btn" onclick="runHarvest()">이메일 수집</button>
+      <button class="btn" onclick="generatePreview()">메일 초안 생성</button>
+      <button class="btn btn-primary" onclick="runSendEmails()" id="btnSend" disabled>메일 발송</button>
+    </div>
+  </div>
+
+  <!-- 탭 섹션 -->
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('email')">콜드메일 초안</div>
+    <div class="tab" onclick="switchTab('candidates')">태양광 후보</div>
+    <div class="tab" onclick="switchTab('emaillist')">이메일 확보 목록</div>
+    <div class="tab" onclick="switchTab('log')">실행 로그</div>
+  </div>
+
+  <!-- 콜드메일 초안 탭 -->
+  <div class="tab-content active" id="tab-email">
+    <div class="section">
+      <h2>콜드메일 초안 검토 <span class="badge" id="emailBadge">검토 대기</span></h2>
+      <p style="font-size:13px;color:#666;margin-bottom:12px;">
+        아래 초안을 확인하고 수정한 후 "승인"하면 이 템플릿으로 자동 발송됩니다.
+      </p>
+      <div id="emailPreviewArea">
+        <div style="text-align:center;padding:40px;color:#aaa;">
+          "메일 초안 생성" 버튼을 눌러 샘플을 확인하세요.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 태양광 후보 탭 -->
+  <div class="tab-content" id="tab-candidates">
+    <div class="section">
+      <h2>태양광 후보 목록 (건축면적 순)</h2>
+      <div id="candidatesTable">
+        <div style="text-align:center;padding:20px;color:#aaa;">로딩 중...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 이메일 확보 목록 탭 -->
+  <div class="tab-content" id="tab-emaillist">
+    <div class="section">
+      <h2>이메일 확보 목록 (발송 대상)</h2>
+      <div id="emailListTable">
+        <div style="text-align:center;padding:20px;color:#aaa;">이메일 수집 후 표시됩니다.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 실행 로그 탭 -->
+  <div class="tab-content" id="tab-log">
+    <div class="section">
+      <h2>실행 로그</h2>
+      <div class="log" id="logArea">시스템 대기 중...</div>
+    </div>
+  </div>
+</div>
+
+<!-- 이메일 수정 모달 -->
+<div class="modal-overlay" id="editModal">
+  <div class="modal">
+    <h3>콜드메일 수정</h3>
+    <label style="font-size:12px;color:#888;">제목</label>
+    <input id="editSubject" placeholder="이메일 제목">
+    <label style="font-size:12px;color:#888;">본문</label>
+    <textarea id="editBody" placeholder="이메일 본문"></textarea>
+    <div class="btn-group" style="justify-content:flex-end;">
+      <button class="btn" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="saveTemplate()">템플릿 저장</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = 'http://localhost:8000';
+let emailTemplate = null;
+let logs = [];
+
+function log(msg) {
+  const time = new Date().toLocaleTimeString('ko-KR');
+  logs.unshift(`[${time}] ${msg}`);
+  if (logs.length > 50) logs.pop();
+  document.getElementById('logArea').textContent = logs.join('\n');
+}
+
+async function api(path, method = 'GET') {
+  try {
+    const opts = method === 'POST' ? { method: 'POST' } : {};
+    const res = await fetch(API + path, opts);
+    return await res.json();
+  } catch (e) {
+    log(`API 오류: ${path} — ${e.message}`);
+    return null;
+  }
+}
+
+async function loadDashboard() {
+  const data = await api('/dashboard');
+  if (!data) {
+    document.getElementById('serverStatus').textContent = '서버 연결 실패';
+    document.getElementById('serverStatus').style.color = '#ef4444';
+    return;
+  }
+  document.getElementById('serverStatus').textContent = '서버 정상 가동 중';
+
+  const s = data.stats || {};
+  document.getElementById('statTotal').textContent = (s.total_factories || 0).toLocaleString();
+  document.getElementById('statEnriched').textContent = (s.enriched || 0).toLocaleString();
+  document.getElementById('statEnrichedSub').textContent = `미보강: ${(s.unenriched || 0).toLocaleString()}건`;
+  document.getElementById('statCandidates').textContent = (s.solar_candidates || 0).toLocaleString();
+  document.getElementById('statEmails').textContent = (s.with_email || 0).toLocaleString();
+  document.getElementById('statEmailsSub').textContent = `발송대기: ${(s.email_ready_to_send || 0).toLocaleString()}건`;
+  document.getElementById('statPhones').textContent = (s.with_phone || 0).toLocaleString();
+  document.getElementById('statSent').textContent = (s.emails_sent || 0).toLocaleString();
+
+  // 파이프라인 상태
+  if (s.enriched > 0) document.getElementById('pipe2').classList.add('active');
+  if ((s.with_email || 0) > 0) document.getElementById('pipe3').classList.add('active');
+  if ((s.email_ready_to_send || 0) > 0) {
+    document.getElementById('pipe4').classList.add('active');
+    document.getElementById('btnSend').disabled = false;
+  }
+
+  document.getElementById('pipe2stat').textContent = `${(s.enriched||0).toLocaleString()}건 완료`;
+  document.getElementById('pipe3stat').textContent = `${(s.with_email||0).toLocaleString()}건 확보`;
+
+  log('대시보드 로딩 완료');
+}
+
+async function loadCandidates() {
+  const data = await api('/dashboard/candidates?limit=30');
+  if (!data || !data.candidates) return;
+
+  let html = '<table><tr><th>회사명</th><th>대표자</th><th>건축면적</th><th>전화번호</th><th>이메일</th><th>산업단지</th></tr>';
+  for (const c of data.candidates) {
+    const emailTag = c.email
+      ? `<span class="tag tag-yes">${c.email}</span>`
+      : '<span class="tag tag-no">미확보</span>';
+    html += `<tr>
+      <td><strong>${c.company_name}</strong></td>
+      <td>${c.ceo_name || '-'}</td>
+      <td>${Math.round(c.building_area_m2).toLocaleString()}m²</td>
+      <td>${c.phone || '-'}</td>
+      <td>${emailTag}</td>
+      <td>${c.industrial_complex || '-'}</td>
+    </tr>`;
+  }
+  html += '</table>';
+  html = `<p style="font-size:12px;color:#888;margin-bottom:8px;">총 ${data.total_candidates}건 (상위 30건 표시)</p>` + html;
+  document.getElementById('candidatesTable').innerHTML = html;
+}
+
+async function loadEmailList() {
+  const data = await api('/dashboard/email-list?limit=50');
+  if (!data || !data.list || data.list.length === 0) {
+    document.getElementById('emailListTable').innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;">이메일 수집 후 표시됩니다. "이메일 수집" 버튼을 실행하세요.</div>';
+    return;
+  }
+
+  let html = `<p style="font-size:12px;color:#888;margin-bottom:8px;">총 ${data.total_with_email}건 (발송완료: ${data.sent}건, 대기: ${data.unsent}건)</p>`;
+  html += '<table><tr><th>회사명</th><th>대표자</th><th>이메일</th><th>건축면적</th><th>발송</th></tr>';
+  for (const c of data.list) {
+    const sentTag = c.email_sent
+      ? '<span class="tag tag-yes">완료</span>'
+      : '<span class="tag tag-wait">대기</span>';
+    html += `<tr>
+      <td><strong>${c.company_name}</strong></td>
+      <td>${c.ceo_name || '-'}</td>
+      <td>${c.email}</td>
+      <td>${Math.round(c.building_area_m2).toLocaleString()}m²</td>
+      <td>${sentTag}</td>
+    </tr>`;
+  }
+  html += '</table>';
+  document.getElementById('emailListTable').innerHTML = html;
+}
+
+async function runEnrich() {
+  log('API 보강 실행 중...');
+  const data = await api('/run/enrich', 'POST');
+  if (data) log(`보강: ${data.message}`);
+  setTimeout(loadDashboard, 3000);
+}
+
+async function runHarvest() {
+  log('이메일 수집 실행 중...');
+  const data = await api('/run/harvest', 'POST');
+  if (data) log(`수집: ${data.message}`);
+  setTimeout(() => { loadDashboard(); loadEmailList(); }, 5000);
+}
+
+async function generatePreview() {
+  log('콜드메일 초안 생성 중...');
+  const data = await api('/test/generate-email');
+  if (!data || !data.email) {
+    log('초안 생성 실패');
+    return;
+  }
+
+  emailTemplate = data.email;
+  const area = document.getElementById('emailPreviewArea');
+  area.innerHTML = `
+    <div class="email-preview">
+      <div class="meta">수신: ${data.factory} 대표님 | 샘플 기반 생성</div>
+      <div class="subject">제목: ${data.email.subject}</div>
+      <hr style="border:none;border-top:1px solid #e8e8e4;margin:8px 0;">
+      <div class="body">${data.email.body}</div>
+    </div>
+    <div class="btn-group">
+      <button class="btn" onclick="openEditModal()">수정하기</button>
+      <button class="btn btn-success" onclick="approveTemplate()">이 템플릿 승인</button>
+    </div>
+  `;
+  document.getElementById('emailBadge').textContent = '검토 중';
+  log('콜드메일 초안 생성 완료 — 검토해주세요');
+}
+
+function openEditModal() {
+  if (!emailTemplate) return;
+  document.getElementById('editSubject').value = emailTemplate.subject;
+  document.getElementById('editBody').value = emailTemplate.body;
+  document.getElementById('editModal').classList.add('show');
+}
+
+function closeModal() {
+  document.getElementById('editModal').classList.remove('show');
+}
+
+function saveTemplate() {
+  emailTemplate.subject = document.getElementById('editSubject').value;
+  emailTemplate.body = document.getElementById('editBody').value;
+  closeModal();
+  // 미리보기 업데이트
+  const area = document.getElementById('emailPreviewArea');
+  area.innerHTML = `
+    <div class="email-preview">
+      <div class="meta">수정된 템플릿</div>
+      <div class="subject">제목: ${emailTemplate.subject}</div>
+      <hr style="border:none;border-top:1px solid #e8e8e4;margin:8px 0;">
+      <div class="body">${emailTemplate.body}</div>
+    </div>
+    <div class="btn-group">
+      <button class="btn" onclick="openEditModal()">다시 수정</button>
+      <button class="btn btn-success" onclick="approveTemplate()">이 템플릿 승인</button>
+    </div>
+  `;
+  log('콜드메일 템플릿 수정 완료');
+}
+
+function approveTemplate() {
+  document.getElementById('emailBadge').textContent = '승인됨';
+  document.getElementById('emailBadge').style.background = '#16a34a';
+  document.getElementById('btnSend').disabled = false;
+  log('콜드메일 템플릿 승인 — 발송 가능 상태');
+}
+
+async function runSendEmails() {
+  if (!confirm('이메일 확보된 후보에게 콜드메일을 발송하시겠습니까?')) return;
+  log('콜드메일 발송 실행 중...');
+  const data = await api('/run/send-emails', 'POST');
+  if (data) log(`발송: ${data.message}`);
+  setTimeout(loadDashboard, 5000);
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+
+  if (name === 'candidates') loadCandidates();
+  if (name === 'emaillist') loadEmailList();
+}
+
+// 초기 로딩
+loadDashboard();
+loadCandidates();
+
+// 30초마다 새로고침
+setInterval(loadDashboard, 30000);
+</script>
+</body>
+</html>
