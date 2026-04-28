@@ -263,17 +263,10 @@ async def test_email(to: str = ""):
 
 @app.get("/test/generate-email")
 async def test_generate():
-    """콜드메일 생성 테스트"""
-    sample = {
-        "company_name": "테스트금속(주)",
-        "ceo_name": "김대표",
-        "address": "경기도 시흥시 정왕동 시화공단",
-        "industrial_complex": "시화국가산업단지",
-        "building_area_m2": 2500,
-        "product": "금속가공",
-    }
-    email = generate_cold_email(sample)
-    return {"factory": sample["company_name"], "email": email}
+    """콜드메일 템플릿 확인"""
+    from services.email_generator import get_template
+    template = get_template()
+    return {"template": template, "mode": "고정 템플릿 (Claude API 미사용)"}
 
 
 # ── 수동 실행 ──────────────────────────────────────────────

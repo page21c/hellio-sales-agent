@@ -188,7 +188,7 @@ tr:hover { background:#fafaf8; }
 </div>
 
 <script>
-const API = ' ';
+const API = 'http://localhost:8000';
 let emailTemplate = null;
 let logs = [];
 
@@ -306,21 +306,22 @@ async function runHarvest() {
 }
 
 async function generatePreview() {
-  log('콜드메일 초안 생성 중...');
+  log('콜드메일 템플릿 로딩 중...');
   const data = await api('/test/generate-email');
-  if (!data || !data.email) {
-    log('초안 생성 실패');
+  if (!data || !data.template) {
+    log('템플릿 로딩 실패');
     return;
   }
 
-  emailTemplate = data.email;
+  emailTemplate = data.template;
+  const bodyHtml = data.template.body.replace(/\n/g, '<br>');
   const area = document.getElementById('emailPreviewArea');
   area.innerHTML = `
     <div class="email-preview">
-      <div class="meta">수신: ${data.factory} 대표님 | 샘플 기반 생성</div>
-      <div class="subject">제목: ${data.email.subject}</div>
+      <div class="meta">${data.mode}</div>
+      <div class="subject">제목: ${data.template.subject}</div>
       <hr style="border:none;border-top:1px solid #e8e8e4;margin:8px 0;">
-      <div class="body">${data.email.body}</div>
+      <div class="body">${bodyHtml}</div>
     </div>
     <div class="btn-group">
       <button class="btn" onclick="openEditModal()">수정하기</button>
@@ -328,7 +329,7 @@ async function generatePreview() {
     </div>
   `;
   document.getElementById('emailBadge').textContent = '검토 중';
-  log('콜드메일 초안 생성 완료 — 검토해주세요');
+  log('콜드메일 템플릿 로딩 완료 — 검토해주세요');
 }
 
 function openEditModal() {
