@@ -29,7 +29,8 @@ from services.email_sender import send_email, send_batch
 from services.email_harvester import harvest_batch, harvest_email
 from services.database import (
     save_factories, save_email_log, get_candidates,
-    get_dashboard_stats, SETUP_SQL,
+    get_dashboard_stats, load_enriched_factories, merge_with_csv,
+    is_connected,
 )
 
 logging.basicConfig(
@@ -150,7 +151,22 @@ async def lifespan(app: FastAPI):
         logger.info(f"CSV 자동 로딩: {CSV_PATH}")
         store["factories"] = load_csv(CSV_PATH)
         store["loaded"] = True
-        logger.info(f"로딩 완료: {len(store['factories']):,}건")
+        logger.info(f"CSV 로딩 완료: {len(store['factories']):,}건")
+
+        # Supabase에서 이전 보강 데이터 복원
+        if is_connected():
+            logger.info("Supabase에서 보강 데이터 복원 중...")
+            db_data = load_enriched_factories()
+            if db_data:
+                store["factories"] = merge_with_csv(
+                    store["factories"], db_data)
+                enriched = sum(1 for f in store["factories"]
+                               if f.get("enriched"))
+                logger.info(f"복원 완료: 보강 {enriched}건")
+            else:
+                logger.info("Supabase에 보강 데이터 없음 (첫 실행)")
+        else:
+            logger.warning("Supabase 미연결 — 메모리 전용 모드")
 
     scheduler.add_job(job_enrich, "cron",
                       hour=config.DAILY_COLLECT_HOUR, minute=0,
@@ -241,7 +257,7 @@ async def init_load_csv(background_tasks: BackgroundTasks,
 @app.get("/setup/sql")
 async def setup_sql():
     """Supabase 테이블 생성 SQL"""
-    return {"sql": SETUP_SQL, "instruction": "Supabase SQL Editor에서 실행하세요"}
+    return {"sql": "이미 테이블이 생성되었습니다.", "instruction": "Supabase에서 확인하세요"}
 
 
 # ── 테스트 ─────────────────────────────────────────────────
