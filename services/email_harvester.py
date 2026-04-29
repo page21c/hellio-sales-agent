@@ -226,6 +226,78 @@ JSON으로만 응답:
 
 
 # ============================================================
+# 홈페이지 크롤링
+# ============================================================
+
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                  'AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+}
+
+CONTACT_PATHS = [
+    '/company', '/about', '/contact', '/intro',
+    '/sub/company', '/sub/about', '/sub/contact',
+]
+
+
+def filter_crawled_emails(raw_emails: set, website: str = "") -> list[str]:
+    """크롤링된 이메일 필터링 — 홈페이지 도메인 매칭"""
+    site_domain = ""
+    if website:
+        site_domain = urlparse(website).netloc.lower().replace('www.', '')
+
+    filtered = []
+    for email in raw_emails:
+        email = email.lower().strip()
+        domain = email.split('@')[1] if '@' in email else ''
+        if domain in BLOCKED_EMAIL_DOMAINS:
+            continue
+        if domain.endswith(('.png', '.jpg', '.gif', '.svg', '.css', '.js')):
+            continue
+        if len(email) > 100:
+            continue
+        # 홈페이지 도메인 매칭
+        if site_domain and site_domain not in domain:
+            continue
+        if email not in filtered:
+            filtered.append(email)
+    return filtered
+
+
+def crawl_website_emails(base_url: str) -> list[str]:
+    """회사 홈페이지에서 이메일 추출"""
+    all_emails = set()
+    try:
+        resp = requests.get(base_url, headers=HEADERS, timeout=10,
+                            allow_redirects=True)
+        if resp.encoding and resp.encoding.lower() == 'iso-8859-1':
+            resp.encoding = resp.apparent_encoding
+        all_emails.update(e.lower() for e in EMAIL_PATTERN.findall(resp.text))
+    except Exception:
+        pass
+
+    if all_emails:
+        return filter_crawled_emails(all_emails, base_url)
+
+    for path in CONTACT_PATHS:
+        try:
+            resp = requests.get(urljoin(base_url, path), headers=HEADERS,
+                                timeout=10, allow_redirects=True)
+            if resp.status_code == 200:
+                if resp.encoding and resp.encoding.lower() == 'iso-8859-1':
+                    resp.encoding = resp.apparent_encoding
+                all_emails.update(
+                    e.lower() for e in EMAIL_PATTERN.findall(resp.text))
+                if all_emails:
+                    break
+        except Exception:
+            pass
+        time.sleep(0.3)
+
+    return filter_crawled_emails(all_emails, base_url)
+
+
+# ============================================================
 # 수집
 # ============================================================
 
@@ -233,6 +305,7 @@ def harvest_email(factory: dict) -> dict | None:
     """
     1. DART (무료, 가장 정확)
     2. Claude 웹검색 (지능적 판별)
+    3. 홈페이지 크롤링 (Claude가 URL만 찾은 경우)
     """
     company_name = factory.get("company_name", "")
     if not company_name:
@@ -247,13 +320,19 @@ def harvest_email(factory: dict) -> dict | None:
         email = dart.get("email", "")
         website = dart.get("homepage", "")
 
-    # 2단계: Claude 웹검색 (DART에서 이메일 못 찾은 경우)
+    # 2단계: Claude 웹검색
     if not email:
         claude = claude_find_email(company_name)
         if claude:
             email = claude.get("email", "")
             if not website:
                 website = claude.get("website", "")
+
+    # 3단계: 홈페이지 크롤링 (이메일 못 찾았지만 홈페이지는 있는 경우)
+    if not email and website:
+        crawled = crawl_website_emails(website)
+        if crawled:
+            email = crawled[0]
 
     if not email:
         return None
