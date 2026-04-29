@@ -37,3 +37,6 @@ GOOGLE_CX = os.getenv("GOOGLE_CX", "")
 
 # DART 전자공시 API (이메일 수집용)
 DART_API_KEY = os.getenv("DART_API_KEY", "")
+
+# SerpAPI (Google 검색 기반 이메일 수집)
+SERP_API_KEY = os.getenv("SERP_API_KEY", "")
