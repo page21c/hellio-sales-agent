@@ -30,3 +30,7 @@ FACTORY_API_URL = "http://apis.data.go.kr/B550624/fctryRegistLndpclInfo/getFctry
 
 # 최소 공장면적 (m²) — 태양광 설치 기준 (200평 = 660m²)
 MIN_FACTORY_AREA = 660
+
+# Google Custom Search API
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+GOOGLE_CX = os.getenv("GOOGLE_CX", "")

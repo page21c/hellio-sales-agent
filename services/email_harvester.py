@@ -1,20 +1,16 @@
 """
-Step 2.5 — Google 검색 기반 이메일 수집
+Step 2.5 — 이메일 수집 (듀얼 방식)
 
-방식:
-  1. Google 검색 "회사명 이메일 연락처" → 검색 결과에서 이메일 추출
-  2. 검색 결과에서 회사 홈페이지 URL 확보
-  3. 홈페이지 + 하위 페이지(회사소개, 연락처) 크롤링
-  4. 이메일 필터링 및 저장
-
-기존 Naver 방식 → 해외 IP 차단으로 성공률 0%
-Google 방식 → 검색 결과 자체에서 이메일 확보 가능
+방식 A: Google Custom Search API로 검색 → 이메일 추출
+방식 B: 회사 홈페이지 직접 크롤링 → 이메일 추출
+두 방식 동시 실행, 모든 유효 이메일 수집
 """
 import re
 import time
 import logging
 import requests
 from urllib.parse import urljoin, urlparse
+from config import GOOGLE_API_KEY, GOOGLE_CX
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +19,6 @@ EMAIL_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# 제외할 이메일 도메인
 EXCLUDE_DOMAINS = {
     'example.com', 'test.com', 'gmail.com', 'naver.com',
     'hanmail.net', 'daum.net', 'yahoo.com', 'hotmail.com',
@@ -33,7 +28,6 @@ EXCLUDE_DOMAINS = {
     'googleapis.com', 'google.com', 'gstatic.com',
 }
 
-# 연락처 페이지 키워드
 CONTACT_PATHS = [
     '/company', '/about', '/contact', '/intro',
     '/sub/company', '/sub/about', '/sub/contact',
@@ -47,14 +41,12 @@ HEADERS = {
     'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8',
 }
 
-# 포털/SNS 등 제외할 도메인
 SKIP_DOMAINS = [
     'google.com', 'naver.com', 'daum.net', 'kakao.com',
     'youtube.com', 'facebook.com', 'instagram.com',
-    'blog.naver', 'cafe.naver', 'search.naver',
-    'wikipedia.org', 'namu.wiki', 'tistory.com',
-    'saramin.co.kr', 'jobkorea.co.kr', 'incruit.com',
-    'catch.co.kr', 'linkedin.com', 'twitter.com',
+    'blog.naver', 'cafe.naver', 'wikipedia.org', 'namu.wiki',
+    'tistory.com', 'saramin.co.kr', 'jobkorea.co.kr',
+    'incruit.com', 'catch.co.kr', 'linkedin.com',
 ]
 
 
@@ -64,15 +56,14 @@ def filter_emails(raw_emails: set) -> list[str]:
     for email in raw_emails:
         email = email.lower().strip()
         domain = email.split('@')[1] if '@' in email else ''
-
         if domain in EXCLUDE_DOMAINS:
             continue
         if domain.endswith(('.png', '.jpg', '.gif', '.svg', '.css', '.js')):
             continue
         if len(email) > 100:
             continue
-
-        filtered.append(email)
+        if email not in filtered:
+            filtered.append(email)
     return filtered
 
 
@@ -80,75 +71,94 @@ def pick_best_email(emails: list[str]) -> str:
     """가장 적합한 이메일 선택"""
     if not emails:
         return ""
-    priority_prefixes = ['info', 'admin', 'sales', 'contact',
-                         'office', 'master', 'webmaster', 'biz']
+    priority = ['info', 'admin', 'sales', 'contact',
+                'office', 'master', 'webmaster', 'biz']
     for email in emails:
         prefix = email.split('@')[0]
-        if prefix in priority_prefixes:
+        if prefix in priority:
             return email
     return emails[0]
 
 
-def google_search_emails(company_name: str) -> dict:
-    """
-    Google 검색으로 회사 이메일과 홈페이지를 찾습니다.
+# ============================================================
+# 방식 A: Google Custom Search API
+# ============================================================
 
-    검색어: "회사명 이메일 연락처"
-    검색 결과 HTML에서 이메일 패턴과 홈페이지 URL을 추출합니다.
+def google_custom_search(company_name: str) -> dict:
     """
+    Google Custom Search API로 회사 이메일 검색
+    하루 100건 무료
+    """
+    if not GOOGLE_API_KEY or not GOOGLE_CX:
+        return {"emails": [], "website": None, "snippets": []}
+
     emails = set()
     website = None
+    snippets = []
 
     queries = [
         f"{company_name} 이메일 연락처",
-        f"{company_name} email contact",
+        f"{company_name} email",
     ]
 
     for query in queries:
         try:
             resp = requests.get(
-                "https://www.google.com/search",
-                params={"q": query, "hl": "ko", "num": 10},
-                headers=HEADERS,
+                "https://www.googleapis.com/customsearch/v1",
+                params={
+                    "key": GOOGLE_API_KEY,
+                    "cx": GOOGLE_CX,
+                    "q": query,
+                    "num": 5,
+                    "lr": "lang_ko",
+                },
                 timeout=10,
             )
+
+            if resp.status_code == 429:
+                logger.warning("Google API 일일 한도 초과")
+                break
+
             if resp.status_code != 200:
+                logger.debug(f"Google API 오류: {resp.status_code}")
                 continue
 
-            html = resp.text
+            data = resp.json()
+            items = data.get("items", [])
 
-            # 검색 결과에서 이메일 추출
-            found = EMAIL_PATTERN.findall(html)
-            for email in found:
-                emails.add(email.lower())
+            for item in items:
+                # 검색 결과 스니펫에서 이메일 추출
+                snippet = item.get("snippet", "")
+                title = item.get("title", "")
+                link = item.get("link", "")
+                snippets.append(snippet)
 
-            # 홈페이지 URL 추출
-            if not website:
-                urls = re.findall(
-                    r'href="(https?://(?:www\.)?'
-                    r'[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}[^"]*)"',
-                    html
-                )
-                for url in urls:
-                    parsed = urlparse(url)
+                found = EMAIL_PATTERN.findall(snippet + " " + title)
+                emails.update(e.lower() for e in found)
+
+                # 홈페이지 URL 추출
+                if not website and link:
+                    parsed = urlparse(link)
                     domain = parsed.netloc.lower()
                     if not any(s in domain for s in SKIP_DOMAINS):
                         website = f"{parsed.scheme}://{parsed.netloc}"
-                        break
 
             if emails:
-                break  # 이미 이메일을 찾았으면 두 번째 쿼리 스킵
-
-            time.sleep(1)
+                break  # 이미 찾았으면 두 번째 쿼리 스킵
 
         except Exception as e:
-            logger.debug(f"Google 검색 실패 [{company_name}]: {e}")
+            logger.debug(f"Google API 실패 [{company_name}]: {e}")
 
     return {
         "emails": filter_emails(emails),
         "website": website,
+        "snippets": snippets,
     }
 
+
+# ============================================================
+# 방식 B: 홈페이지 직접 크롤링
+# ============================================================
 
 def crawl_website_emails(base_url: str) -> list[str]:
     """회사 홈페이지에서 이메일 추출"""
@@ -165,7 +175,6 @@ def crawl_website_emails(base_url: str) -> list[str]:
     except Exception:
         pass
 
-    # 이미 이메일을 찾았으면 리턴
     if all_emails:
         return filter_emails(all_emails)
 
@@ -189,24 +198,31 @@ def crawl_website_emails(base_url: str) -> list[str]:
     return filter_emails(all_emails)
 
 
+# ============================================================
+# 듀얼 수집 (A + B 동시)
+# ============================================================
+
 def harvest_email(factory: dict) -> dict | None:
     """
-    공장 1건에 대해 이메일 수집
+    공장 1건에 대해 이메일 수집 (듀얼 방식)
 
-    1단계: Google 검색에서 이메일 + 홈페이지 URL 확보
-    2단계: 홈페이지 크롤링으로 추가 이메일 수집
-    3단계: 가장 적합한 이메일 선택
+    1. Google Custom Search API로 이메일 + 홈페이지 URL
+    2. 홈페이지 직접 크롤링으로 추가 이메일
+    3. 모든 유효 이메일 반환
     """
     company_name = factory.get("company_name", "")
     if not company_name:
         return None
 
-    # 1단계: Google 검색
-    search_result = google_search_emails(company_name)
-    all_emails = set(search_result["emails"])
+    all_emails = set()
+    website = None
+
+    # 방식 A: Google Custom Search API
+    search_result = google_custom_search(company_name)
+    all_emails.update(search_result["emails"])
     website = search_result["website"]
 
-    # 2단계: 홈페이지 크롤링 (Google에서 못 찾았거나 추가 수집)
+    # 방식 B: 홈페이지 크롤링
     if website:
         site_emails = crawl_website_emails(website)
         all_emails.update(site_emails)
@@ -214,24 +230,22 @@ def harvest_email(factory: dict) -> dict | None:
     if not all_emails:
         return None
 
-    # 3단계: 최적 이메일 선택
-    best = pick_best_email(list(all_emails))
+    email_list = list(all_emails)
+    best = pick_best_email(email_list)
 
-    logger.info(f"이메일 발견 [{company_name}]: {best} "
-                f"(총 {len(all_emails)}개)")
+    logger.info(f"이메일 발견 [{company_name}]: {email_list}")
 
     return {
         "email": best,
-        "all_emails": list(all_emails),
+        "all_emails": email_list,
         "website": website or "",
     }
 
 
 def harvest_batch(factories: list[dict], max_count: int = 100) -> dict:
     """
-    태양광 후보 중 이메일 미확보 건에 대해 일괄 수집
-
-    Google 검색 rate limit 감안하여 요청 간 2초 대기
+    태양광 후보 중 이메일 미확보 건 일괄 수집
+    Google API 하루 100건 무료 감안
     """
     targets = [
         f for f in factories
@@ -251,6 +265,7 @@ def harvest_batch(factories: list[dict], max_count: int = 100) -> dict:
 
         if result:
             factory["email"] = result["email"]
+            factory["all_emails"] = result["all_emails"]
             factory["website"] = result["website"]
             harvested += 1
         else:
@@ -261,7 +276,7 @@ def harvest_batch(factories: list[dict], max_count: int = 100) -> dict:
                         f"{harvested}건 성공, {failed}건 실패 "
                         f"/ {len(targets)}건")
 
-        time.sleep(2)  # Google rate limit 방지
+        time.sleep(1)  # API rate limit 방지
 
     success_rate = (harvested / len(targets) * 100) if targets else 0
     logger.info(
