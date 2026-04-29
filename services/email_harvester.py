@@ -308,9 +308,10 @@ def crawl_website_emails(base_url: str) -> list[str]:
 def harvest_email(factory: dict) -> dict | None:
     """
     이메일 수집 (품질 우선 순서):
-    1. DART API → 가장 정확한 공식 이메일
+    1. DART API → 기업개황
     2. SerpAPI → 회사 홈페이지 URL 찾기
     3. 홈페이지 크롤링 → 회사 자체 이메일만 추출
+    4. 홈페이지 도메인과 일치하는 이메일만 최종 선택
     """
     company_name = factory.get("company_name", "")
     if not company_name:
@@ -319,7 +320,7 @@ def harvest_email(factory: dict) -> dict | None:
     all_emails = set()
     website = ""
 
-    # 1단계: DART (무료, 가장 정확)
+    # 1단계: DART (무료)
     dart = dart_company_info(company_name)
     if dart:
         if dart["email"] and is_valid_email(dart["email"]):
@@ -327,7 +328,7 @@ def harvest_email(factory: dict) -> dict | None:
         if dart["homepage"]:
             website = dart["homepage"]
 
-    # 2단계: SerpAPI → 홈페이지 URL만 (이메일 아님)
+    # 2단계: SerpAPI → 홈페이지 URL만
     if not website:
         found_url = serpapi_find_website(company_name)
         if found_url:
@@ -340,6 +341,16 @@ def harvest_email(factory: dict) -> dict | None:
 
     if not all_emails:
         return None
+
+    # 4단계: 홈페이지 도메인 매칭 필터
+    # 홈페이지가 있으면 그 도메인 이메일만 남김
+    if website:
+        site_domain = urlparse(website).netloc.lower().replace('www.', '')
+        matched = [e for e in all_emails
+                   if site_domain in e.split('@')[1]]
+        if matched:
+            all_emails = set(matched)
+        # 매칭 안 되면 전체 유지 (DART만 있는 경우)
 
     email_list = list(all_emails)
     best = pick_best_email(email_list)
