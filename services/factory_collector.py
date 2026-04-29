@@ -80,22 +80,19 @@ def load_csv(csv_path: str) -> list[dict]:
         factories.append({
             "company_name": str(row.get('회사명', '')).strip(),
             "industrial_complex": str(row.get('단지명', '')).strip(),
-            "product": str(row.get('생산품', '')).strip(),
             "address": str(row.get('공장주소', '')).strip(),
             "region": extract_sido(row.get('공장주소', '')),
-            # API 보강 대상 필드 (초기값 비어있음)
             "ceo_name": "",
             "phone": "",
             "building_area_m2": 0,
-            "lot_area_m2": 0,
-            "land_use": "",
-            "factory_manage_no": "",
-            # 상태
             "enriched": False,
             "solar_candidate": False,
             "email_sent": False,
-            "collected_at": datetime.utcnow().isoformat(),
+            "email": "",
         })
+
+    # pandas 메모리 해제
+    del df, standalone
 
     return factories
 
