@@ -146,27 +146,32 @@ async def job_send_emails():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # CSV 자동 로딩 (파일이 있으면)
-    if os.path.exists(CSV_PATH):
-        logger.info(f"CSV 자동 로딩: {CSV_PATH}")
-        store["factories"] = load_csv(CSV_PATH)
-        store["loaded"] = True
-        logger.info(f"CSV 로딩 완료: {len(store['factories']):,}건")
+    # CSV 로딩을 백그라운드에서 실행 (health check 타임아웃 방지)
+    import asyncio
 
-        # Supabase에서 이전 보강 데이터 복원
-        if is_connected():
-            logger.info("Supabase에서 보강 데이터 복원 중...")
-            db_data = load_enriched_factories()
-            if db_data:
-                store["factories"] = merge_with_csv(
-                    store["factories"], db_data)
-                enriched = sum(1 for f in store["factories"]
-                               if f.get("enriched"))
-                logger.info(f"복원 완료: 보강 {enriched}건")
+    async def _load_data():
+        if os.path.exists(CSV_PATH):
+            logger.info(f"CSV 자동 로딩: {CSV_PATH}")
+            store["factories"] = load_csv(CSV_PATH)
+            store["loaded"] = True
+            logger.info(f"CSV 로딩 완료: {len(store['factories']):,}건")
+
+            # Supabase에서 이전 보강 데이터 복원
+            if is_connected():
+                logger.info("Supabase에서 보강 데이터 복원 중...")
+                db_data = load_enriched_factories()
+                if db_data:
+                    store["factories"] = merge_with_csv(
+                        store["factories"], db_data)
+                    enriched = sum(1 for f in store["factories"]
+                                   if f.get("enriched"))
+                    logger.info(f"복원 완료: 보강 {enriched}건")
+                else:
+                    logger.info("Supabase에 보강 데이터 없음 (첫 실행)")
             else:
-                logger.info("Supabase에 보강 데이터 없음 (첫 실행)")
-        else:
-            logger.warning("Supabase 미연결 — 메모리 전용 모드")
+                logger.warning("Supabase 미연결 — 메모리 전용 모드")
+
+    asyncio.create_task(_load_data())
 
     scheduler.add_job(job_enrich, "cron",
                       hour=config.DAILY_COLLECT_HOUR, minute=0,
@@ -233,6 +238,12 @@ async def health():
     return {"ok": True, "loaded": store["loaded"],
             "factories": len(store["factories"]),
             "time": datetime.now().isoformat()}
+
+
+@app.get("/healthz")
+async def healthz():
+    """Render health check 전용 — 항상 즉시 응답"""
+    return {"ok": True}
 
 
 # ── 초기 세팅 ─────────────────────────────────────────────
