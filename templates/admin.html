@@ -78,6 +78,21 @@ tr:hover { background:#fafaf8; }
 .tab.active { color:#1a1a1a; border-bottom-color:#1a1a1a; font-weight:500; }
 .tab-content { display:none; }
 .tab-content.active { display:block; }
+
+/* 작업 상태 */
+.job-status { background:#fff; border-radius:10px; padding:16px 20px; margin-bottom:20px; border:1px solid #e8e8e4; }
+.job-status h2 { font-size:15px; font-weight:600; margin-bottom:12px; }
+.job-row { display:flex; align-items:center; gap:12px; padding:8px 0; border-bottom:1px solid #f0f0ec; }
+.job-row:last-child { border-bottom:none; }
+.job-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+.job-dot.idle { background:#ddd; }
+.job-dot.running { background:#f59e0b; animation: pulse 1s infinite; }
+.job-dot.done { background:#16a34a; }
+.job-label { font-size:13px; font-weight:500; width:100px; }
+.job-msg { font-size:13px; color:#666; flex:1; }
+.job-time { font-size:11px; color:#aaa; }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+.pipe-step.running { border-color:#f59e0b; background:#fffbeb; animation: pulse 1.5s infinite; }
 </style>
 </head>
 <body>
@@ -117,6 +132,29 @@ tr:hover { background:#fafaf8; }
       <button class="btn" onclick="runHarvest()">이메일 수집</button>
       <button class="btn" onclick="generatePreview()">메일 초안 생성</button>
       <button class="btn btn-primary" onclick="runSendEmails()" id="btnSend" disabled>메일 발송</button>
+    </div>
+  </div>
+
+  <!-- 작업 상태 -->
+  <div class="job-status">
+    <h2>작업 상태</h2>
+    <div class="job-row">
+      <div class="job-dot idle" id="dotEnrich"></div>
+      <div class="job-label">API 보강</div>
+      <div class="job-msg" id="msgEnrich">대기</div>
+      <div class="job-time" id="timeEnrich"></div>
+    </div>
+    <div class="job-row">
+      <div class="job-dot idle" id="dotHarvest"></div>
+      <div class="job-label">이메일 수집</div>
+      <div class="job-msg" id="msgHarvest">대기</div>
+      <div class="job-time" id="timeHarvest"></div>
+    </div>
+    <div class="job-row">
+      <div class="job-dot idle" id="dotSend"></div>
+      <div class="job-label">메일 발송</div>
+      <div class="job-msg" id="msgSend">대기</div>
+      <div class="job-time" id="timeSend"></div>
     </div>
   </div>
 
@@ -295,6 +333,7 @@ async function runEnrich() {
   log('API 보강 실행 중...');
   const data = await api('/run/enrich', 'POST');
   if (data) log(`보강: ${data.message}`);
+  setTimeout(loadJobStatus, 1000);
   setTimeout(loadDashboard, 3000);
 }
 
@@ -302,6 +341,7 @@ async function runHarvest() {
   log('이메일 수집 실행 중...');
   const data = await api('/run/harvest', 'POST');
   if (data) log(`수집: ${data.message}`);
+  setTimeout(loadJobStatus, 1000);
   setTimeout(() => { loadDashboard(); loadEmailList(); }, 5000);
 }
 
@@ -376,6 +416,7 @@ async function runSendEmails() {
   log('콜드메일 발송 실행 중...');
   const data = await api('/run/send-emails', 'POST');
   if (data) log(`발송: ${data.message}`);
+  setTimeout(loadJobStatus, 1000);
   setTimeout(loadDashboard, 5000);
 }
 
@@ -392,9 +433,57 @@ function switchTab(name) {
 // 초기 로딩
 loadDashboard();
 loadCandidates();
+loadJobStatus();
 
-// 30초마다 새로고침
+// 10초마다 상태 갱신, 30초마다 대시보드 갱신
+setInterval(loadJobStatus, 10000);
 setInterval(loadDashboard, 30000);
+
+async function loadJobStatus() {
+  const data = await api('/status');
+  if (!data) return;
+
+  updateJobRow('Enrich', data.enrich);
+  updateJobRow('Harvest', data.harvest);
+  updateJobRow('Send', data.send);
+
+  // 파이프라인 단계에 running 표시
+  const pipe2 = document.getElementById('pipe2');
+  const pipe3 = document.getElementById('pipe3');
+  const pipe5 = document.getElementById('pipe5');
+
+  pipe2.classList.remove('running');
+  pipe3.classList.remove('running');
+  pipe5.classList.remove('running');
+
+  if (data.enrich && data.enrich.running) pipe2.classList.add('running');
+  if (data.harvest && data.harvest.running) pipe3.classList.add('running');
+  if (data.send && data.send.running) pipe5.classList.add('running');
+}
+
+function updateJobRow(name, job) {
+  if (!job) return;
+  const dot = document.getElementById('dot' + name);
+  const msg = document.getElementById('msg' + name);
+  const time = document.getElementById('time' + name);
+
+  dot.className = 'job-dot';
+  if (job.running) {
+    dot.classList.add('running');
+  } else if (job.completed_at || job.message.includes('완료')) {
+    dot.classList.add('done');
+  } else {
+    dot.classList.add('idle');
+  }
+
+  msg.textContent = job.progress || job.message || '대기';
+
+  const ts = job.completed_at || job.started_at;
+  if (ts) {
+    const d = new Date(ts);
+    time.textContent = d.toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit'});
+  }
+}
 </script>
 </body>
 </html>

@@ -50,6 +50,12 @@ store = {
     "last_enrich": None,     # 마지막 보강 결과
     "last_harvest": None,    # 마지막 이메일 수집 결과
     "last_email": None,      # 마지막 발송 결과
+    # 실시간 작업 상태
+    "job_status": {
+        "enrich": {"running": False, "message": "대기", "progress": ""},
+        "harvest": {"running": False, "message": "대기", "progress": ""},
+        "send": {"running": False, "message": "대기", "progress": ""},
+    },
 }
 
 CSV_PATH = os.getenv("CSV_PATH", "data/factories.csv")
@@ -65,6 +71,12 @@ async def job_enrich():
         logger.warning("CSV 미로딩 — /init/load-csv 먼저 실행 필요")
         return
 
+    store["job_status"]["enrich"] = {
+        "running": True, "message": "보강 진행 중",
+        "progress": "API 호출 시작...",
+        "started_at": datetime.now().isoformat(),
+    }
+
     logger.info("=== 일일 보강 시작 ===")
     # 블로킹 작업을 별도 스레드에서 실행 (이벤트 루프 차단 방지)
     result = await asyncio.to_thread(
@@ -76,19 +88,42 @@ async def job_enrich():
     enriched = [f for f in store["factories"] if f.get("enriched")]
     await asyncio.to_thread(save_factories, enriched)
 
+    store["job_status"]["enrich"] = {
+        "running": False, "message": "보강 완료",
+        "progress": f"보강 {result.get('enriched', 0)}건, 후보 {result.get('candidates', 0)}건",
+        "completed_at": datetime.now().isoformat(),
+    }
     logger.info(f"보강 완료: {result}")
 
 
 async def job_harvest_emails():
-    """매일 08시: 홈페이지 크롤링으로 이메일 수집 (~100건)"""
+    """매일 08시: Google 검색 기반 이메일 수집 (~100건)"""
     if not store["loaded"]:
         return
 
-    logger.info("=== 이메일 수집 시작 ===")
+    store["job_status"]["harvest"] = {
+        "running": True, "message": "이메일 수집 중",
+        "progress": "Google 검색 시작...",
+        "started_at": datetime.now().isoformat(),
+    }
+
+    logger.info("=== 이메일 수집 시작 (Google 검색) ===")
     result = await asyncio.to_thread(
         harvest_batch, store["factories"], 100
     )
     store["last_harvest"] = {**result, "at": datetime.now().isoformat()}
+
+    # 이메일 확보된 건 DB에 저장
+    with_email = [f for f in store["factories"]
+                  if f.get("email") and f.get("enriched")]
+    if with_email:
+        await asyncio.to_thread(save_factories, with_email)
+
+    store["job_status"]["harvest"] = {
+        "running": False, "message": "이메일 수집 완료",
+        "progress": f"성공 {result.get('harvested', 0)}건, 실패 {result.get('failed', 0)}건 ({result.get('success_rate', '0%')})",
+        "completed_at": datetime.now().isoformat(),
+    }
     logger.info(f"이메일 수집 완료: {result}")
 
 
@@ -96,6 +131,12 @@ async def job_send_emails():
     """매일 09시: 이메일 확보된 후보에 콜드메일 생성·발송"""
     if not store["loaded"]:
         return
+
+    store["job_status"]["send"] = {
+        "running": True, "message": "발송 진행 중",
+        "progress": "대상 확인 중...",
+        "started_at": datetime.now().isoformat(),
+    }
 
     logger.info("=== 콜드메일 발송 시작 ===")
 
@@ -111,6 +152,11 @@ async def job_send_emails():
     if not candidates:
         logger.info("발송 대상 없음 (이메일 확보 + 660m²↑ + 미발송 건 없음)")
         store["last_email"] = {"sent": 0, "at": datetime.now().isoformat()}
+        store["job_status"]["send"] = {
+            "running": False, "message": "발송 대상 없음",
+            "progress": "이메일 확보된 미발송 건이 없습니다",
+            "completed_at": datetime.now().isoformat(),
+        }
         return
 
     target = candidates[:config.MAX_EMAILS_PER_DAY]
@@ -137,12 +183,22 @@ async def job_send_emails():
                     f["email_sent"] = True
                     break
         store["last_email"] = {**result, "at": datetime.now().isoformat()}
+        store["job_status"]["send"] = {
+            "running": False, "message": "발송 완료",
+            "progress": f"성공 {result.get('sent', 0)}건, 실패 {result.get('failed', 0)}건",
+            "completed_at": datetime.now().isoformat(),
+        }
         logger.info(f"발송 완료: {result.get('sent', 0)}건")
     else:
         store["last_email"] = {
             "generated": len(emails),
             "no_valid_email": True,
             "at": datetime.now().isoformat(),
+        }
+        store["job_status"]["send"] = {
+            "running": False, "message": "발송 대상 없음",
+            "progress": "유효한 이메일이 없습니다",
+            "completed_at": datetime.now().isoformat(),
         }
 
 
@@ -250,6 +306,12 @@ async def health():
 async def healthz():
     """Render health check 전용 — 항상 즉시 응답"""
     return {"ok": True}
+
+
+@app.get("/status")
+async def job_status():
+    """각 작업의 실시간 상태 반환"""
+    return store["job_status"]
 
 
 # ── 초기 세팅 ─────────────────────────────────────────────
