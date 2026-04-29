@@ -1,14 +1,15 @@
 """
-Step 2.5 — 이메일 수집 (품질 우선)
-
-핵심 원칙: 회사 자체 홈페이지에서만 이메일 추출
-제3자 사이트(채용사이트, 기업정보사이트)의 이메일 완전 차단
+Step 2.5 — 이메일 수집 (Claude 웹검색 + DART)
 
 방식:
-  1. DART API → 기업개황에서 이메일/홈페이지 (가장 정확)
-  2. SerpAPI → 회사 홈페이지 URL만 추출 (이메일은 추출 안 함)
-  3. 회사 홈페이지 직접 크롤링 → 이메일 추출
-  4. 이메일 도메인이 홈페이지 도메인과 일치하는지 검증
+  1. DART API → 기업개황에서 이메일 (무료, 가장 정확)
+  2. Claude API + 웹검색 → 지능적으로 회사 공식 이메일 찾기
+  3. 홈페이지 크롤링 → 보조 수집
+
+Claude 웹검색의 장점:
+  - 제3자 이메일 자동 판별 (채용사이트, 기업정보사이트 이메일 제외)
+  - 회사 공식 이메일만 선별
+  - 검색 1건당 약 $0.01~0.02
 """
 import re
 import os
@@ -20,7 +21,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from io import BytesIO
 from urllib.parse import urljoin, urlparse
-from config import DART_API_KEY, SERP_API_KEY
+from config import DART_API_KEY, ANTHROPIC_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -29,103 +30,20 @@ EMAIL_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# 제3자 사이트 이메일 차단 (이 도메인의 이메일은 무조건 제외)
 BLOCKED_EMAIL_DOMAINS = {
-    # 포털/무료메일
     'gmail.com', 'naver.com', 'hanmail.net', 'daum.net',
     'yahoo.com', 'hotmail.com', 'nate.com', 'kakao.com', 'outlook.com',
-    # 채용사이트
     'saramin.co.kr', 'jobkorea.co.kr', 'incruit.com', 'catch.co.kr',
     'jobplanet.co.kr', 'wanted.co.kr', 'rocketpunch.com',
-    # 기업정보사이트
     'nicebizinfo.com', 'rndcircle.io', 'cookiedeal.io',
-    'chemknock.com', 'jinhak.com',
-    # 기타
-    'sentry.io', 'w3.org', 'schema.org', 'googleapis.com',
-    'google.com', 'gstatic.com', 'example.com', 'test.com',
-    'yale.edu', 'kt.com', 'kopo.ac.kr', 'korea.com',
-    'kiria.org', 'insa.co.kr', 'itp.or.kr',
-}
-
-# 홈페이지로 인정하지 않는 도메인
-SKIP_DOMAINS = [
-    'google.', 'naver.com', 'daum.net', 'kakao.com',
-    'youtube.com', 'facebook.com', 'instagram.com',
-    'wikipedia.org', 'namu.wiki', 'tistory.com',
-    'saramin.co.kr', 'jobkorea.co.kr', 'incruit.com',
-    'catch.co.kr', 'jobplanet.co.kr', 'rocketpunch.com',
-    'nicebizinfo.com', 'rndcircle.io', 'cookiedeal.io',
-    'wanted.co.kr', 'linkedin.com', 'twitter.com',
-    'blog.naver', 'cafe.naver', 'korcham.net',
-    'ftc.go.kr', 'dart.fss.or.kr',
-]
-
-CONTACT_PATHS = [
-    '/company', '/about', '/contact', '/intro',
-    '/sub/company', '/sub/about', '/sub/contact',
-    '/kr/company', '/ko/company', '/ko/about',
-]
-
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                  'AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+    'gabia.com', 'example.com', 'test.com',
 }
 
 CORP_CODE_FILE = "data/dart_corp_codes.json"
 
 
 # ============================================================
-# 이메일 검증
-# ============================================================
-
-def is_valid_email(email: str, website: str = "") -> bool:
-    """회사 자체 이메일인지 검증"""
-    email = email.lower().strip()
-    domain = email.split('@')[1] if '@' in email else ''
-
-    # 차단 도메인 체크
-    if domain in BLOCKED_EMAIL_DOMAINS:
-        return False
-
-    # 파일 확장자 체크
-    if domain.endswith(('.png', '.jpg', '.gif', '.svg', '.css', '.js')):
-        return False
-
-    if len(email) > 100:
-        return False
-
-    # 홈페이지 도메인과 매칭 검증 (있으면)
-    if website:
-        site_domain = urlparse(website).netloc.lower().replace('www.', '')
-        if site_domain and domain != site_domain:
-            # 서브도메인은 허용 (예: mail.company.co.kr → company.co.kr)
-            if not domain.endswith('.' + site_domain) and \
-               not site_domain.endswith('.' + domain):
-                # 도메인 불일치 — 하지만 같은 회사의 다른 도메인일 수 있으므로
-                # .co.kr, .com 등은 허용
-                pass  # 일단 통과, 차단 도메인만 걸러냄
-
-    return True
-
-
-def filter_emails(raw_emails: set, website: str = "") -> list[str]:
-    """유효한 회사 이메일만 필터링"""
-    return [e.lower().strip() for e in raw_emails
-            if is_valid_email(e, website)]
-
-
-def pick_best_email(emails: list[str]) -> str:
-    if not emails:
-        return ""
-    priority = ['info', 'admin', 'sales', 'contact', 'office', 'master']
-    for email in emails:
-        if email.split('@')[0] in priority:
-            return email
-    return emails[0]
-
-
-# ============================================================
-# 방식 A: DART API (가장 정확)
+# DART API
 # ============================================================
 
 def _normalize(name: str) -> str:
@@ -205,159 +123,143 @@ def dart_company_info(company_name: str) -> dict | None:
         hm_url = (data.get("hm_url") or "").strip()
         if hm_url and not hm_url.startswith("http"):
             hm_url = "http://" + hm_url
+        # DART 이메일 도메인 검증
+        if email:
+            domain = email.split('@')[1] if '@' in email else ''
+            if domain in BLOCKED_EMAIL_DOMAINS:
+                email = ""
         return {"email": email, "homepage": hm_url}
     except Exception:
         return None
 
 
 # ============================================================
-# 방식 B: SerpAPI → 홈페이지 URL만 추출 (이메일은 추출 안 함)
+# Claude API + 웹검색
 # ============================================================
 
-def serpapi_find_website(company_name: str) -> str | None:
-    """SerpAPI로 회사 홈페이지 URL만 찾기 (이메일 추출 안 함)"""
-    if not SERP_API_KEY:
+def claude_find_email(company_name: str) -> dict | None:
+    """
+    Claude API에 웹검색을 시켜서 회사 공식 이메일을 찾습니다.
+    Claude가 지능적으로 제3자 이메일을 걸러냅니다.
+    """
+    if not ANTHROPIC_API_KEY:
         return None
 
+    prompt = f"""'{company_name}'의 공식 이메일 주소와 홈페이지를 찾아주세요.
+
+규칙:
+- 회사 자체 도메인 이메일만 (gmail, naver 등 무료메일 제외)
+- 채용사이트(사람인, 잡코리아), 기업정보사이트의 이메일 제외
+- 회사 홈페이지에 공개된 대표 이메일 우선
+
+JSON으로만 응답:
+{{"email": "이메일주소 또는 빈문자열", "website": "홈페이지URL 또는 빈문자열"}}"""
+
     try:
-        resp = requests.get(
-            "https://serpapi.com/search",
-            params={
-                "api_key": SERP_API_KEY,
-                "engine": "google",
-                "q": f"{company_name} 공식 홈페이지",
-                "hl": "ko",
-                "gl": "kr",
-                "num": 5,
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
             },
-            timeout=15,
+            json={
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 300,
+                "tools": [
+                    {"type": "web_search_20250305", "name": "web_search"}
+                ],
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
         )
+
         if resp.status_code != 200:
+            logger.debug(f"Claude API 오류: {resp.status_code}")
             return None
 
         data = resp.json()
 
-        # Knowledge graph에 홈페이지가 있으면 최우선
-        knowledge = data.get("knowledge_graph", {})
-        if knowledge:
-            kw = knowledge.get("website")
-            if kw:
-                return kw
+        # 응답에서 텍스트 추출
+        text = ""
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                text += block.get("text", "")
 
-        # 검색 결과에서 회사 자체 홈페이지 찾기
-        for result in data.get("organic_results", []):
-            link = result.get("link", "")
-            if not link:
-                continue
-            domain = urlparse(link).netloc.lower()
-            if not any(s in domain for s in SKIP_DOMAINS):
-                parsed = urlparse(link)
-                return f"{parsed.scheme}://{parsed.netloc}"
+        if not text:
+            return None
 
+        # JSON 파싱
+        clean = text.strip().strip("`").strip()
+        if clean.startswith("json"):
+            clean = clean[4:].strip()
+
+        # JSON 부분만 추출
+        json_match = re.search(r'\{[^}]+\}', clean)
+        if json_match:
+            result = json.loads(json_match.group())
+        else:
+            result = json.loads(clean)
+
+        email = (result.get("email") or "").strip().lower()
+        website = (result.get("website") or "").strip()
+
+        # 이메일 검증
+        if email:
+            domain = email.split('@')[1] if '@' in email else ''
+            if domain in BLOCKED_EMAIL_DOMAINS:
+                email = ""
+
+        if not email and not website:
+            return None
+
+        logger.info(f"Claude 검색 [{company_name}]: "
+                    f"email={email}, website={website}")
+        return {"email": email, "website": website}
+
+    except json.JSONDecodeError:
+        logger.debug(f"Claude 응답 JSON 파싱 실패: {text[:200]}")
         return None
-
     except Exception as e:
-        logger.debug(f"SerpAPI 실패 [{company_name}]: {e}")
+        logger.debug(f"Claude API 실패 [{company_name}]: {e}")
         return None
 
 
 # ============================================================
-# 방식 C: 홈페이지 크롤링 → 이메일 추출
-# ============================================================
-
-def crawl_website_emails(base_url: str) -> list[str]:
-    """회사 홈페이지에서만 이메일 추출"""
-    all_emails = set()
-
-    # 메인 페이지
-    try:
-        resp = requests.get(base_url, headers=HEADERS, timeout=10,
-                            allow_redirects=True)
-        if resp.encoding and resp.encoding.lower() == 'iso-8859-1':
-            resp.encoding = resp.apparent_encoding
-        all_emails.update(e.lower() for e in EMAIL_PATTERN.findall(resp.text))
-    except Exception:
-        pass
-
-    if all_emails:
-        return filter_emails(all_emails, base_url)
-
-    # 하위 페이지 탐색
-    for path in CONTACT_PATHS:
-        try:
-            resp = requests.get(urljoin(base_url, path), headers=HEADERS,
-                                timeout=10, allow_redirects=True)
-            if resp.status_code == 200:
-                if resp.encoding and resp.encoding.lower() == 'iso-8859-1':
-                    resp.encoding = resp.apparent_encoding
-                all_emails.update(
-                    e.lower() for e in EMAIL_PATTERN.findall(resp.text))
-                if all_emails:
-                    break
-        except Exception:
-            pass
-        time.sleep(0.3)
-
-    return filter_emails(all_emails, base_url)
-
-
-# ============================================================
-# 3중 수집 (품질 우선)
+# 수집
 # ============================================================
 
 def harvest_email(factory: dict) -> dict | None:
     """
-    이메일 수집 (품질 우선 순서):
-    1. DART API → 기업개황
-    2. SerpAPI → 회사 홈페이지 URL 찾기
-    3. 홈페이지 크롤링 → 회사 자체 이메일만 추출
-    4. 홈페이지 도메인과 일치하는 이메일만 최종 선택
+    1. DART (무료, 가장 정확)
+    2. Claude 웹검색 (지능적 판별)
     """
     company_name = factory.get("company_name", "")
     if not company_name:
         return None
 
-    all_emails = set()
+    email = ""
     website = ""
 
-    # 1단계: DART (무료)
+    # 1단계: DART
     dart = dart_company_info(company_name)
     if dart:
-        if dart["email"] and is_valid_email(dart["email"]):
-            all_emails.add(dart["email"].lower())
-        if dart["homepage"]:
-            website = dart["homepage"]
+        email = dart.get("email", "")
+        website = dart.get("homepage", "")
 
-    # 2단계: SerpAPI → 홈페이지 URL만
-    if not website:
-        found_url = serpapi_find_website(company_name)
-        if found_url:
-            website = found_url
+    # 2단계: Claude 웹검색 (DART에서 이메일 못 찾은 경우)
+    if not email:
+        claude = claude_find_email(company_name)
+        if claude:
+            email = claude.get("email", "")
+            if not website:
+                website = claude.get("website", "")
 
-    # 3단계: 홈페이지 크롤링
-    if website:
-        site_emails = crawl_website_emails(website)
-        all_emails.update(site_emails)
-
-    if not all_emails:
+    if not email:
         return None
 
-    # 4단계: 홈페이지 도메인 매칭 필터
-    # 홈페이지가 있으면 그 도메인 이메일만 남김
-    if website:
-        site_domain = urlparse(website).netloc.lower().replace('www.', '')
-        matched = [e for e in all_emails
-                   if site_domain in e.split('@')[1]]
-        if matched:
-            all_emails = set(matched)
-        # 매칭 안 되면 전체 유지 (DART만 있는 경우)
-
-    email_list = list(all_emails)
-    best = pick_best_email(email_list)
-
-    logger.info(f"이메일 발견 [{company_name}]: {email_list} "
-                f"(홈페이지: {website})")
-    return {"email": best, "all_emails": email_list, "website": website}
+    logger.info(f"이메일 발견 [{company_name}]: {email}")
+    return {"email": email, "all_emails": [email], "website": website}
 
 
 def harvest_batch(factories: list[dict], max_count: int = 100) -> dict:
