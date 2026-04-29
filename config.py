@@ -34,3 +34,6 @@ MIN_FACTORY_AREA = 660
 # Google Custom Search API
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 GOOGLE_CX = os.getenv("GOOGLE_CX", "")
+
+# DART 전자공시 API (이메일 수집용)
+DART_API_KEY = os.getenv("DART_API_KEY", "")
