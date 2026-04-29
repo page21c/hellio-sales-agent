@@ -10,6 +10,7 @@ HELLIO BRIDGE — 영업 자동화 에이전트 (하이브리드 방식)
 import os
 import json
 import logging
+import asyncio
 from datetime import datetime
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -65,12 +66,15 @@ async def job_enrich():
         return
 
     logger.info("=== 일일 보강 시작 ===")
-    result = enrich_batch(store["factories"], max_calls=900)
+    # 블로킹 작업을 별도 스레드에서 실행 (이벤트 루프 차단 방지)
+    result = await asyncio.to_thread(
+        enrich_batch, store["factories"], 900
+    )
     store["last_enrich"] = {**result, "at": datetime.now().isoformat()}
 
     # DB에도 보강된 데이터 저장
     enriched = [f for f in store["factories"] if f.get("enriched")]
-    save_factories(enriched)
+    await asyncio.to_thread(save_factories, enriched)
 
     logger.info(f"보강 완료: {result}")
 
@@ -81,7 +85,9 @@ async def job_harvest_emails():
         return
 
     logger.info("=== 이메일 수집 시작 ===")
-    result = harvest_batch(store["factories"], max_count=100)
+    result = await asyncio.to_thread(
+        harvest_batch, store["factories"], 100
+    )
     store["last_harvest"] = {**result, "at": datetime.now().isoformat()}
     logger.info(f"이메일 수집 완료: {result}")
 
@@ -299,14 +305,13 @@ async def test_generate():
 # ── 수동 실행 ──────────────────────────────────────────────
 
 @app.post("/run/enrich")
-async def run_enrich(background_tasks: BackgroundTasks,
-                     max_calls: int = 900):
+async def run_enrich(max_calls: int = 900):
     """API 보강 수동 실행"""
     if not store["loaded"]:
         return {"error": "CSV 미로딩 — /init/load-csv 먼저 실행"}
 
     stats = get_stats(store["factories"])
-    background_tasks.add_task(job_enrich)
+    asyncio.create_task(job_enrich())
     return {
         "message": f"보강 시작 (미보강: {stats['unenriched']:,}건, 최대 {max_calls}건)",
         "status": "running",
@@ -314,17 +319,16 @@ async def run_enrich(background_tasks: BackgroundTasks,
 
 
 @app.post("/run/send-emails")
-async def run_send_emails(background_tasks: BackgroundTasks):
+async def run_send_emails():
     """콜드메일 발송 수동 실행"""
     if not store["loaded"]:
         return {"error": "CSV 미로딩"}
-    background_tasks.add_task(job_send_emails)
+    asyncio.create_task(job_send_emails())
     return {"message": "발송 작업 시작", "status": "running"}
 
 
 @app.post("/run/harvest")
-async def run_harvest(background_tasks: BackgroundTasks,
-                      max_count: int = 100):
+async def run_harvest(max_count: int = 100):
     """이메일 수집 수동 실행"""
     if not store["loaded"]:
         return {"error": "CSV 미로딩"}
@@ -333,7 +337,7 @@ async def run_harvest(background_tasks: BackgroundTasks,
         1 for f in store["factories"]
         if f.get("solar_candidate") and f.get("enriched") and not f.get("email")
     )
-    background_tasks.add_task(job_harvest_emails)
+    asyncio.create_task(job_harvest_emails())
     return {
         "message": f"이메일 수집 시작 (대상: {candidates_no_email}건, 최대 {max_count}건)",
         "status": "running",
