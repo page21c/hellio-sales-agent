@@ -29,7 +29,18 @@ EMAIL_BODY = """안녕하세요. 대표님.
 
 관심있으시면, 홈페이지를 통해 접수 또는 편하신 시간에 회신 부탁드립니다.
 
-helliobridge.com"""
+helliobridge.com
+
+--
+김태헌 (Taeheon Kim), Ph.D.
+대표이사 · CEO
+
+HELLIOBRIDGE
+010-8691-7166 | 02-6499-7166
+tk@helliobridge.com | helliobridge.com
+비엠엘벤처(주) | 경기도 수원시 영통구 이의동 1275-8
+
+태양광 발전소 매도 | 공장·창고 지붕 임대 | 건물주·사업주 수수료 0원"""
 
 
 def generate_cold_email(factory: dict) -> dict | None:
