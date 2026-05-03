@@ -210,6 +210,30 @@ def merge_with_csv(csv_factories: list[dict],
 # 조회
 # ============================================================
 
+def get_sent_emails() -> list[str]:
+    """Supabase email_logs에서 이미 발송된 이메일 주소 목록 조회"""
+    if not is_connected():
+        return []
+
+    try:
+        resp = requests.get(
+            _url("email_logs"),
+            headers=HEADERS,
+            params={
+                "select": "to_email",
+                "limit": 10000,
+            },
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            rows = resp.json()
+            return [r.get("to_email", "").lower() for r in rows if r.get("to_email")]
+        return []
+    except Exception as e:
+        logger.error(f"발송 이력 조회 실패: {e}")
+        return []
+
+
 def get_candidates(limit: int = 50, offset: int = 0) -> list[dict]:
     """태양광 후보 공장 목록 조회 (이메일 미발송 건)"""
     if not is_connected():

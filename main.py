@@ -31,7 +31,7 @@ from services.email_harvester import harvest_batch, harvest_email
 from services.database import (
     save_factories, save_email_log, get_candidates,
     get_dashboard_stats, load_enriched_factories, merge_with_csv,
-    is_connected,
+    is_connected, get_sent_emails,
 )
 
 logging.basicConfig(
@@ -103,11 +103,11 @@ async def job_harvest_emails():
 
     store["job_status"]["harvest"] = {
         "running": True, "message": "이메일 수집 중",
-        "progress": "Google 검색 시작...",
+        "progress": "DART + Claude 웹검색 시작...",
         "started_at": datetime.now().isoformat(),
     }
 
-    logger.info("=== 이메일 수집 시작 (Google 검색) ===")
+    logger.info("=== 이메일 수집 시작 ===")
     result = await asyncio.to_thread(
         harvest_batch, store["factories"], 100
     )
@@ -140,17 +140,36 @@ async def job_send_emails():
 
     logger.info("=== 콜드메일 발송 시작 ===")
 
-    # 이메일이 있는 후보만 추출
+    # Supabase에서 이미 발송된 이메일 목록 조회
+    already_sent = set()
+    if is_connected():
+        sent_logs = await asyncio.to_thread(get_sent_emails)
+        already_sent = set(sent_logs)
+        logger.info(f"이미 발송된 이메일: {len(already_sent)}건")
+
+    # 이메일이 있는 후보 추출
     candidates = [
         f for f in store["factories"]
         if f.get("enriched")
         and f.get("solar_candidate")
         and f.get("email")
         and not f.get("email_sent")
+        and f.get("email", "").lower() not in already_sent
     ]
 
+    # 이메일 주소 기준 중복 제거 (같은 회사 여러 공장)
+    seen_emails = set()
+    unique_candidates = []
+    for c in candidates:
+        email = c.get("email", "").lower()
+        if email not in seen_emails:
+            seen_emails.add(email)
+            unique_candidates.append(c)
+
+    candidates = unique_candidates
+
     if not candidates:
-        logger.info("발송 대상 없음 (이메일 확보 + 660m²↑ + 미발송 건 없음)")
+        logger.info("발송 대상 없음 (이메일 확보 + 미발송 건 없음)")
         store["last_email"] = {"sent": 0, "at": datetime.now().isoformat()}
         store["job_status"]["send"] = {
             "running": False, "message": "발송 대상 없음",
@@ -160,7 +179,7 @@ async def job_send_emails():
         return
 
     target = candidates[:config.MAX_EMAILS_PER_DAY]
-    logger.info(f"발송 대상: {len(target)}건")
+    logger.info(f"발송 대상: {len(target)}건 (중복 제거 후)")
 
     # 메일 생성
     emails = generate_batch(target, max_count=config.MAX_EMAILS_PER_DAY)
@@ -176,12 +195,17 @@ async def job_send_emails():
 
     if to_send:
         result = send_batch(to_send, max_per_day=config.MAX_EMAILS_PER_DAY)
-        # 발송 성공한 건 마킹
-        for item in to_send:
-            for f in store["factories"]:
-                if f.get("company_name") == item.get("company_name"):
-                    f["email_sent"] = True
-                    break
+        # 발송 성공한 이메일의 모든 공장 레코드에 마킹
+        sent_email_addrs = {item.get("to_email", "").lower() for item in to_send}
+        for f in store["factories"]:
+            if f.get("email", "").lower() in sent_email_addrs:
+                f["email_sent"] = True
+
+        # Supabase에 발송 완료 상태 저장
+        if is_connected():
+            sent_factories = [f for f in store["factories"] if f.get("email_sent")]
+            await asyncio.to_thread(save_factories, sent_factories)
+
         store["last_email"] = {**result, "at": datetime.now().isoformat()}
         store["job_status"]["send"] = {
             "running": False, "message": "발송 완료",
