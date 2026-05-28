@@ -164,39 +164,37 @@ def load_enriched_factories() -> list[dict]:
         return []
 
 
+def _norm_addr(addr: str) -> str:
+    """주소 정규화 — 공백·형식 차이로 매칭 실패하는 것 방지"""
+    return "".join(str(addr or "").split())
+
+
 def merge_with_csv(csv_factories: list[dict],
                    db_factories: list[dict]) -> list[dict]:
     """
     CSV 데이터와 DB 보강 데이터를 합칩니다.
-
-    DB에 있는 공장은 보강 정보(면적, 전화번호, 이메일 등)를 덮어쓰고,
-    DB에 없는 공장은 CSV 원본 그대로 유지합니다.
+    주소를 정규화해서 매칭하므로, 공백·형식 차이로 보강이 누락되지 않습니다.
     """
-    # DB 데이터를 주소 기준으로 인덱싱
     db_map = {}
     for f in db_factories:
-        addr = f.get("address", "")
-        if addr:
-            db_map[addr] = f
+        key = _norm_addr(f.get("address", ""))
+        if key:
+            db_map[key] = f
 
     merged = 0
     for factory in csv_factories:
-        addr = factory.get("address", "")
-        if addr in db_map:
-            db_row = db_map[addr]
-            # DB 보강 정보로 업데이트
-            factory["factory_manage_no"] = db_row.get(
-                "factory_manage_no", "")
+        key = _norm_addr(factory.get("address", ""))
+        if key and key in db_map:
+            db_row = db_map[key]
+            factory["factory_manage_no"] = db_row.get("factory_manage_no", "")
             factory["ceo_name"] = db_row.get("ceo_name", "")
             factory["phone"] = db_row.get("phone", "")
-            factory["building_area_m2"] = db_row.get(
-                "building_area_m2", 0)
+            factory["building_area_m2"] = db_row.get("building_area_m2", 0)
             factory["lot_area_m2"] = db_row.get("lot_area_m2", 0)
             factory["land_use"] = db_row.get("land_use", "")
             factory["admin_org"] = db_row.get("admin_org", "")
             factory["enriched"] = True
-            factory["solar_candidate"] = db_row.get(
-                "solar_candidate", False)
+            factory["solar_candidate"] = db_row.get("solar_candidate", False)
             factory["email"] = db_row.get("email", "")
             factory["website"] = db_row.get("website", "")
             factory["email_sent"] = db_row.get("email_sent", False)
